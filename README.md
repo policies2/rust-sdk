@@ -1,4 +1,4 @@
-# `policies2-rust-sdk`
+# `policies`
 
 Execute stored policies and flows over REST or gRPC using API keys only.
 
@@ -15,7 +15,7 @@ It does not support creating, updating, publishing, or administering resources.
 
 ```toml
 [dependencies]
-policies2-rust-sdk = "0.1"
+policies = "0.1"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -23,7 +23,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ## Usage
 
 ```rust
-use policies2_rust_sdk::{
+use policies::{
     ExecutePolicyRequest, ExecutionClient, ExecutionClientConfig, Reference, TransportConfig,
     TransportKind,
 };

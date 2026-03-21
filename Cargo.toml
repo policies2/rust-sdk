@@ -1,5 +1,5 @@
 [package]
-name = "policies2-rust-sdk"
+name = "policies"
 version = "0.1.0"
 edition = "2021"
 description = "Execute stored policies and flows over REST using API keys"

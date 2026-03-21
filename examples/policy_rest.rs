@@ -1,4 +1,4 @@
-use policies2_rust_sdk::{
+use policies::{
     ExecutePolicyRequest, ExecutionClient, ExecutionClientConfig, Reference, TransportConfig,
     TransportKind,
 };
