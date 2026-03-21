@@ -7,4 +7,11 @@ updates:
       prefix-development: chore
       include: scope
     schedule:
-      interval: daily
+      interval: weekly
+    groups:
+      grpc-stack:
+        patterns:
+          - "prost"
+          - "prost-*"
+          - "tonic"
+          - "tonic-*"
