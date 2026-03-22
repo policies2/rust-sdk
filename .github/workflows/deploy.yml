@@ -15,7 +15,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
-      - uses: keloran/version-bump@main
+      - uses: keloran/version-bump@v1
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --all-features
   cargo:
@@ -28,6 +28,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
-      - uses: keloran/version-bump@main
+      - uses: keloran/version-bump@v1
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo publish --all-features --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty
