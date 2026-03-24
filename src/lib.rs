@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Number, Value};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Once;
 use std::time::Duration;
 use tonic::client::Grpc;
 use tonic::codec::ProstCodec;
@@ -14,8 +15,19 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Code, Request};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_REST_BASE_URL: &str = "https://api.policy2.net/run";
+const DEFAULT_RPC_ADDRESS: &str = "shuttle.proxy.rlwy.net:27179";
 const POLICY_RPC_PATH: &str = "/policy.v1.PolicyService/RunPolicy";
 const FLOW_RPC_PATH: &str = "/policy.v1.FlowService/RunFlow";
+static BUGFIXES_PANIC_HOOK: Once = Once::new();
+
+fn default_rest_base_url() -> &'static str {
+    DEFAULT_REST_BASE_URL
+}
+
+fn default_rpc_address() -> &'static str {
+    DEFAULT_RPC_ADDRESS
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -193,13 +205,31 @@ pub struct ExecutionClient {
     user_agent: Option<String>,
 }
 
+pub fn init_bugfixes() -> Result<(), reqwest::Error> {
+    bugfixes::init_global_from_env()?;
+    BUGFIXES_PANIC_HOOK.call_once(bugfixes::install_global_panic_hook);
+    Ok(())
+}
+
 impl ExecutionClient {
     pub fn new(config: ExecutionClientConfig) -> Result<Self, Error> {
+        let _ = init_bugfixes();
+
         if config.api_key.trim().is_empty() {
+            let _ = bugfixes::error!("execution client configuration rejected: missing api_key");
             return Err(Error::Configuration("api_key is required".into()));
         }
 
         let timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT);
+        let _ = bugfixes::log!(
+            "initializing execution client transport={} timeout_ms={} has_user_agent={}",
+            match config.transport.kind {
+                TransportKind::Rest => "rest",
+                TransportKind::Rpc => "rpc",
+            },
+            timeout.as_millis(),
+            config.user_agent.is_some(),
+        );
 
         let transport = match config.transport.kind {
             TransportKind::Rest => {
@@ -208,14 +238,18 @@ impl ExecutionClient {
                     .base_url
                     .as_deref()
                     .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| {
-                        Error::Configuration("transport.base_url is required for REST".into())
-                    })?;
+                    .unwrap_or(default_rest_base_url());
 
                 let client = HttpClient::builder()
                     .timeout(timeout)
                     .build()
-                    .map_err(Error::Transport)?;
+                    .map_err(|err| {
+                        let _ =
+                            bugfixes::error!("failed to build REST http client: {}", err);
+                        Error::Transport(err)
+                    })?;
+
+                let _ = bugfixes::info!("configured REST transport base_url={}", base_url);
 
                 Transport::Rest {
                     client,
@@ -228,20 +262,32 @@ impl ExecutionClient {
                     .address
                     .as_deref()
                     .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| {
-                        Error::Configuration("transport.address is required for RPC".into())
-                    })?;
+                    .unwrap_or(default_rpc_address());
 
                 let uri = normalize_rpc_address(address, config.transport.tls);
+                let _ = bugfixes::info!(
+                    "configured RPC transport address={} tls={}",
+                    uri,
+                    config.transport.tls
+                );
                 let endpoint = Endpoint::from_shared(uri)
-                    .map_err(|err| Error::Configuration(format!("invalid rpc address: {err}")))?
+                    .map_err(|err| {
+                        let _ = bugfixes::error!("invalid rpc address: {}", err);
+                        Error::Configuration(format!("invalid rpc address: {err}"))
+                    })?
                     .connect_timeout(timeout)
                     .timeout(timeout);
 
                 let endpoint = if config.transport.tls {
                     endpoint
                         .tls_config(ClientTlsConfig::new())
-                        .map_err(Error::RpcTransport)?
+                        .map_err(|err| {
+                            let _ = bugfixes::error!(
+                                "failed to configure RPC tls transport: {}",
+                                err
+                            );
+                            Error::RpcTransport(err)
+                        })?
                 } else {
                     endpoint
                 };
@@ -263,6 +309,15 @@ impl ExecutionClient {
         &self,
         request: ExecutePolicyRequest,
     ) -> Result<PolicyExecutionResult, Error> {
+        let reference = request.reference;
+        let request_id = request.id.clone();
+        let _ = bugfixes::info!(
+            "executing policy id={} reference={} transport={}",
+            request_id,
+            reference_name(reference),
+            self.transport_name(),
+        );
+
         match &self.transport {
             Transport::Rest { base_url, client } => {
                 let path = policy_path(&request.id, request.reference);
@@ -270,6 +325,11 @@ impl ExecutionClient {
                     .send_rest(client, base_url, &path, request.data)
                     .await?;
                 response.kind = "policy".to_string();
+                let _ = bugfixes::info!(
+                    "policy execution completed id={} transport=rest result={}",
+                    request_id,
+                    response.result
+                );
                 Ok(response)
             }
             Transport::Rpc { channel } => {
@@ -292,7 +352,13 @@ impl ExecutionClient {
                     .send_rpc(&mut grpc, POLICY_RPC_PATH, rpc_request)
                     .await?;
 
-                Ok(policy_response_from_rpc(response))
+                let response = policy_response_from_rpc(response);
+                let _ = bugfixes::info!(
+                    "policy execution completed id={} transport=rpc result={}",
+                    request_id,
+                    response.result
+                );
+                Ok(response)
             }
         }
     }
@@ -301,6 +367,15 @@ impl ExecutionClient {
         &self,
         request: ExecuteFlowRequest,
     ) -> Result<FlowExecutionResult, Error> {
+        let reference = request.reference;
+        let request_id = request.id.clone();
+        let _ = bugfixes::info!(
+            "executing flow id={} reference={} transport={}",
+            request_id,
+            reference_name(reference),
+            self.transport_name(),
+        );
+
         match &self.transport {
             Transport::Rest { base_url, client } => {
                 let path = flow_path(&request.id, request.reference);
@@ -308,6 +383,11 @@ impl ExecutionClient {
                     .send_rest(client, base_url, &path, request.data)
                     .await?;
                 response.kind = "flow".to_string();
+                let _ = bugfixes::info!(
+                    "flow execution completed id={} transport=rest nodes={}",
+                    request_id,
+                    response.node_response.len()
+                );
                 Ok(response)
             }
             Transport::Rpc { channel } => {
@@ -327,7 +407,13 @@ impl ExecutionClient {
                 };
 
                 let response = self.send_rpc(&mut grpc, FLOW_RPC_PATH, rpc_request).await?;
-                Ok(flow_response_from_rpc(response))
+                let response = flow_response_from_rpc(response);
+                let _ = bugfixes::info!(
+                    "flow execution completed id={} transport=rpc nodes={}",
+                    request_id,
+                    response.node_response.len()
+                );
+                Ok(response)
             }
         }
     }
@@ -342,8 +428,10 @@ impl ExecutionClient {
     where
         T: for<'de> Deserialize<'de>,
     {
+        let url = format!("{base_url}{path}");
+        let _ = bugfixes::log!("sending REST request {}", url);
         let mut builder = client
-            .post(format!("{base_url}{path}"))
+            .post(&url)
             .header("content-type", "application/json")
             .header("x-api-key", &self.api_key)
             .json(&json!({ "data": data }));
@@ -352,9 +440,21 @@ impl ExecutionClient {
             builder = builder.header("user-agent", user_agent);
         }
 
-        let response = builder.send().await.map_err(Error::Transport)?;
+        let response = builder.send().await.map_err(|err| {
+            let _ = bugfixes::error!("REST request failed url={} error={}", url, err);
+            Error::Transport(err)
+        })?;
         let status = response.status();
-        let body = response.text().await.map_err(Error::Transport)?;
+        let _ = bugfixes::log!("received REST response url={} status={}", url, status);
+        let body = response.text().await.map_err(|err| {
+            let _ = bugfixes::error!(
+                "failed to read REST response body url={} status={} error={}",
+                url,
+                status,
+                err
+            );
+            Error::Transport(err)
+        })?;
 
         decode_rest_response(status, &body)
     }
@@ -371,35 +471,50 @@ impl ExecutionClient {
     {
         let mut tonic_request = Request::new(request);
         let api_key = MetadataValue::try_from(self.api_key.as_str())
-            .map_err(|err| Error::Metadata(format!("invalid api_key metadata: {err}")))?;
+            .map_err(|err| {
+                let _ = bugfixes::error!("invalid api_key metadata: {}", err);
+                Error::Metadata(format!("invalid api_key metadata: {err}"))
+            })?;
         tonic_request.metadata_mut().insert("x-api-key", api_key);
 
         let path = PathAndQuery::from_static(path);
         let codec = ProstCodec::default();
+        let _ = bugfixes::log!("sending RPC request path={}", path.as_str());
 
         grpc.unary(tonic_request, path, codec)
             .await
-            .map(|response| response.into_inner())
+            .map(|response| {
+                let _ = bugfixes::log!("received RPC response");
+                response.into_inner()
+            })
             .map_err(map_rpc_status)
+    }
+
+    fn transport_name(&self) -> &'static str {
+        match self.transport {
+            Transport::Rest { .. } => "rest",
+            Transport::Rpc { .. } => "rpc",
+        }
     }
 }
 
 fn policy_path(id: &str, reference: Reference) -> String {
     match reference {
-        Reference::Base => format!("/run/policy/{id}"),
-        Reference::Version => format!("/run/policy_version/{id}"),
+        Reference::Base => format!("/policy/{id}"),
+        Reference::Version => format!("/policy_version/{id}"),
     }
 }
 
 fn flow_path(id: &str, reference: Reference) -> String {
     match reference {
-        Reference::Base => format!("/run/flow/{id}"),
-        Reference::Version => format!("/run/flow_version/{id}"),
+        Reference::Base => format!("/flow/{id}"),
+        Reference::Version => format!("/flow_version/{id}"),
     }
 }
 
 fn normalize_rpc_address(address: &str, tls: bool) -> String {
     if address.contains("://") {
+        let _ = bugfixes::log!("using explicit RPC address {}", address);
         return address.to_string();
     }
     if tls {
@@ -415,6 +530,8 @@ fn map_http_error(status: StatusCode, body: String) -> Error {
     } else {
         body
     };
+
+    let _ = bugfixes::error!("REST request returned status={} body={}", status, message);
 
     match status {
         StatusCode::UNAUTHORIZED => Error::Authentication(message),
@@ -434,10 +551,23 @@ where
         return Err(map_http_error(status, body.to_string()));
     }
 
-    serde_json::from_str::<T>(body).map_err(|err| Error::Decode(err.to_string()))
+    serde_json::from_str::<T>(body).map_err(|err| {
+        let _ = bugfixes::error!(
+            "failed to decode REST response status={} error={} body={}",
+            status,
+            err,
+            body
+        );
+        Error::Decode(err.to_string())
+    })
 }
 
 fn map_rpc_status(status: tonic::Status) -> Error {
+    let _ = bugfixes::error!(
+        "RPC request failed code={} message={}",
+        status.code(),
+        status.message()
+    );
     match status.code() {
         Code::Unauthenticated => Error::Authentication(status.message().to_string()),
         Code::PermissionDenied => Error::Authorization(status.message().to_string()),
@@ -454,9 +584,12 @@ fn json_to_struct(value: Value) -> Result<Struct, Error> {
             }
             Ok(Struct { fields })
         }
-        _ => Err(Error::Configuration(
-            "request data must be a JSON object".to_string(),
-        )),
+        _ => {
+            let _ = bugfixes::error!("request data must be a JSON object");
+            Err(Error::Configuration(
+                "request data must be a JSON object".to_string(),
+            ))
+        }
     }
 }
 
@@ -467,7 +600,10 @@ fn json_to_prost_value(value: Value) -> Result<ProstValue, Error> {
         Value::Number(value) => ProstKind::NumberValue(
             value
                 .as_f64()
-                .ok_or_else(|| Error::Configuration("invalid numeric value".into()))?,
+                .ok_or_else(|| {
+                    let _ = bugfixes::error!("invalid numeric value in request payload");
+                    Error::Configuration("invalid numeric value".into())
+                })?,
         ),
         Value::String(value) => ProstKind::StringValue(value),
         Value::Array(values) => ProstKind::ListValue(ListValue {
@@ -517,6 +653,13 @@ fn optional_struct_to_json(value: Option<Struct>) -> Value {
 
 fn optional_value_to_json(value: Option<ProstValue>) -> Value {
     value.map(prost_value_to_json).unwrap_or(Value::Null)
+}
+
+fn reference_name(reference: Reference) -> &'static str {
+    match reference {
+        Reference::Base => "base",
+        Reference::Version => "version",
+    }
 }
 
 fn policy_response_from_rpc(response: RunResponse) -> PolicyExecutionResult {
@@ -707,8 +850,8 @@ mod tests {
     }
 
     #[test]
-    fn requires_rest_base_url() {
-        let result = ExecutionClient::new(ExecutionClientConfig {
+    fn defaults_rest_base_url() {
+        let client = ExecutionClient::new(ExecutionClientConfig {
             api_key: "pk_test".into(),
             transport: TransportConfig {
                 kind: TransportKind::Rest,
@@ -718,19 +861,32 @@ mod tests {
             },
             timeout: None,
             user_agent: None,
-        });
+        })
+        .expect("rest client should default base url");
 
-        assert!(matches!(result, Err(Error::Configuration(_))));
+        match client.transport {
+            Transport::Rest { base_url, .. } => assert_eq!(default_rest_base_url(), base_url),
+            Transport::Rpc { .. } => panic!("expected rest transport"),
+        }
+    }
+
+    #[test]
+    fn defaults_rpc_address() {
+        assert_eq!(default_rpc_address(), "shuttle.proxy.rlwy.net:27179");
+        assert_eq!(
+            normalize_rpc_address(default_rpc_address(), false),
+            "http://shuttle.proxy.rlwy.net:27179"
+        );
     }
 
     #[test]
     fn path_helpers_work() {
         assert_eq!(
-            "/run/policy/base-123",
+            "/policy/base-123",
             policy_path("base-123", Reference::Base)
         );
         assert_eq!(
-            "/run/flow_version/flow-123",
+            "/flow_version/flow-123",
             flow_path("flow-123", Reference::Version)
         );
     }

@@ -1,19 +1,19 @@
 use policies::{
-    ExecuteFlowRequest, ExecutionClient, ExecutionClientConfig, Reference, TransportConfig,
-    TransportKind,
+    init_bugfixes, ExecuteFlowRequest, ExecutionClient, ExecutionClientConfig, Reference,
+    TransportConfig, TransportKind,
 };
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_bugfixes()?;
+
     let client = ExecutionClient::new(ExecutionClientConfig {
         api_key: std::env::var("POLICY_API_KEY").unwrap_or_else(|_| "pk_live_example".into()),
         transport: TransportConfig {
             kind: TransportKind::Rpc,
             base_url: None,
-            address: Some(
-                std::env::var("POLICY_RPC_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8081".into()),
-            ),
+            address: std::env::var("POLICY_RPC_ADDRESS").ok(),
             tls: false,
         },
         timeout: None,
