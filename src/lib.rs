@@ -39,8 +39,8 @@ pub enum TransportKind {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Reference {
-    Base,
     #[default]
+    Base,
     Version,
 }
 
@@ -244,8 +244,7 @@ impl ExecutionClient {
                     .timeout(timeout)
                     .build()
                     .map_err(|err| {
-                        let _ =
-                            bugfixes::error!("failed to build REST http client: {}", err);
+                        let _ = bugfixes::error!("failed to build REST http client: {}", err);
                         Error::Transport(err)
                     })?;
 
@@ -279,15 +278,10 @@ impl ExecutionClient {
                     .timeout(timeout);
 
                 let endpoint = if config.transport.tls {
-                    endpoint
-                        .tls_config(ClientTlsConfig::new())
-                        .map_err(|err| {
-                            let _ = bugfixes::error!(
-                                "failed to configure RPC tls transport: {}",
-                                err
-                            );
-                            Error::RpcTransport(err)
-                        })?
+                    endpoint.tls_config(ClientTlsConfig::new()).map_err(|err| {
+                        let _ = bugfixes::error!("failed to configure RPC tls transport: {}", err);
+                        Error::RpcTransport(err)
+                    })?
                 } else {
                     endpoint
                 };
@@ -470,11 +464,10 @@ impl ExecutionClient {
         TResponse: Message + Default + Send + Sync + 'static,
     {
         let mut tonic_request = Request::new(request);
-        let api_key = MetadataValue::try_from(self.api_key.as_str())
-            .map_err(|err| {
-                let _ = bugfixes::error!("invalid api_key metadata: {}", err);
-                Error::Metadata(format!("invalid api_key metadata: {err}"))
-            })?;
+        let api_key = MetadataValue::try_from(self.api_key.as_str()).map_err(|err| {
+            let _ = bugfixes::error!("invalid api_key metadata: {}", err);
+            Error::Metadata(format!("invalid api_key metadata: {err}"))
+        })?;
         tonic_request.metadata_mut().insert("x-api-key", api_key);
 
         let path = PathAndQuery::from_static(path);
@@ -597,14 +590,10 @@ fn json_to_prost_value(value: Value) -> Result<ProstValue, Error> {
     let kind = match value {
         Value::Null => ProstKind::NullValue(0),
         Value::Bool(value) => ProstKind::BoolValue(value),
-        Value::Number(value) => ProstKind::NumberValue(
-            value
-                .as_f64()
-                .ok_or_else(|| {
-                    let _ = bugfixes::error!("invalid numeric value in request payload");
-                    Error::Configuration("invalid numeric value".into())
-                })?,
-        ),
+        Value::Number(value) => ProstKind::NumberValue(value.as_f64().ok_or_else(|| {
+            let _ = bugfixes::error!("invalid numeric value in request payload");
+            Error::Configuration("invalid numeric value".into())
+        })?),
         Value::String(value) => ProstKind::StringValue(value),
         Value::Array(values) => ProstKind::ListValue(ListValue {
             values: values
@@ -881,14 +870,16 @@ mod tests {
 
     #[test]
     fn path_helpers_work() {
-        assert_eq!(
-            "/policy/base-123",
-            policy_path("base-123", Reference::Base)
-        );
+        assert_eq!("/policy/base-123", policy_path("base-123", Reference::Base));
         assert_eq!(
             "/flow_version/flow-123",
             flow_path("flow-123", Reference::Version)
         );
+    }
+
+    #[test]
+    fn reference_defaults_to_base() {
+        assert_eq!(Reference::Base, Reference::default());
     }
 
     #[test]

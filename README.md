@@ -20,6 +20,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+`Reference::Base` is the default. Use `Reference::Version` only when you want to execute a specific version ID.
+
 ## Usage
 
 ```rust
@@ -65,6 +67,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Call `init_bugfixes()?` during startup to enable Bugfixes logging and the panic hook for the process.
 
 If unset, the SDK defaults REST execution to `https://api.policy2.net/run` and gRPC execution to `shuttle.proxy.rlwy.net:27179`. REST requests append `/policy...` or `/flow...` automatically based on the operation. Set `transport.base_url` or `transport.address` to override them.
+
+Execution reference rules:
+
+- Base policy: `reference: Reference::Base`
+- Base flow: `reference: Reference::Base`
+- Versioned policy: `reference: Reference::Version`
+- Versioned flow: `reference: Reference::Version`
+- If a caller uses `Reference::default()`, it resolves to `Reference::Base`
 
 - REST policy execution: [`examples/policy_rest.rs`](./examples/policy_rest.rs)
 - REST flow execution: [`examples/flow_rest.rs`](./examples/flow_rest.rs)
