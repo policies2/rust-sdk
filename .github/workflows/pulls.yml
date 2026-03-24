@@ -8,7 +8,7 @@ on:
 
 
 jobs:
-  test:
+  fmt:
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
@@ -17,6 +17,30 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --check
+  clippy:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+  test:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    needs: clippy
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
   automerge:
     runs-on: ubuntu-latest
@@ -51,7 +75,9 @@ jobs:
           PR_URL: ${{github.event.pull_request.html_url}}
           GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
   update_release_draft:
-    needs: test
+    needs:
+      - clippy
+      - test
     runs-on: ubuntu-latest
     permissions:
       contents: write
