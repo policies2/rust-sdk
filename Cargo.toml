@@ -8,8 +8,8 @@ license = "MIT"
 [dependencies]
 bugfixes = "0.2.4"
 http = "1.3"
-prost = "0.14"
-prost-types = "0.14"
+prost = "0.13"
+prost-types = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
