@@ -8,6 +8,13 @@ updates:
       include: scope
     schedule:
       interval: weekly
+    ignore:
+      # prost must stay in sync with tonic; tonic 0.12 requires prost 0.13
+      # remove these ignores when tonic supports prost 0.14+
+      - dependency-name: "prost"
+        versions: [">= 0.14"]
+      - dependency-name: "prost-types"
+        versions: [">= 0.14"]
     groups:
       grpc-stack:
         patterns:
