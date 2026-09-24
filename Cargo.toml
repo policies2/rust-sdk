@@ -6,7 +6,7 @@ description = "Execute stored policies and flows over REST using API keys"
 license = "MIT"
 
 [dependencies]
-bugfixes = "0.2.4"
+bugfixes = "0.4.1"
 http = "1.4"
 prost = "0.13"
 prost-types = "0.13"
