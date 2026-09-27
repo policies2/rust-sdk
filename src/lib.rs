@@ -3,7 +3,7 @@ use prost::Message;
 use prost_types::{value::Kind as ProstKind, ListValue, Struct, Value as ProstValue};
 use reqwest::{Client as HttpClient, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Number, Value};
+use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Once;
@@ -152,6 +152,8 @@ pub struct FlowExecutionResult {
     #[serde(default)]
     pub kind: String,
     pub result: Value,
+    #[serde(default)]
+    pub output: Value,
     #[serde(rename = "nodeResponse")]
     pub node_response: Vec<FlowNodeResponse>,
     pub execution: Option<FlowExecutionTiming>,
@@ -428,7 +430,7 @@ impl ExecutionClient {
             .post(&url)
             .header("content-type", "application/json")
             .header("x-api-key", &self.api_key)
-            .json(&json!({ "data": data }));
+            .json(&rest_request_body(data));
 
         if let Some(user_agent) = &self.user_agent {
             builder = builder.header("user-agent", user_agent);
@@ -489,6 +491,10 @@ impl ExecutionClient {
             Transport::Rpc { .. } => "rpc",
         }
     }
+}
+
+fn rest_request_body(data: Value) -> Value {
+    data
 }
 
 fn policy_path(id: &str, reference: Reference) -> String {
@@ -680,6 +686,7 @@ fn flow_response_from_rpc(response: FlowResponse) -> FlowExecutionResult {
     FlowExecutionResult {
         kind: "flow".into(),
         result: optional_value_to_json(response.result),
+        output: Value::Null,
         node_response: response
             .node_response
             .into_iter()
@@ -819,6 +826,8 @@ struct RpcFlowExecutionTiming {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -1033,12 +1042,24 @@ mod tests {
     fn decodes_rest_flow_response() {
         let result: FlowExecutionResult = decode_rest_response(
             StatusCode::OK,
-            r#"{"kind":"","result":{"approved":true},"nodeResponse":[{"nodeId":"node-1","nodeType":"policy","response":{"result":true,"trace":null,"rule":["rule"],"data":{"approved":true},"error":null,"labels":null}}]}"#,
+            r#"{"kind":"","result":null,"output":{"start":1790503964,"end":1790503970},"nodeResponse":[{"nodeId":"node-1","nodeType":"shape","response":{"result":true,"trace":null,"rule":["Custom response: shape_transform"],"data":{"start":1790503964,"end":1790503970},"error":null,"labels":null}}]}"#,
         )
         .unwrap();
 
         assert_eq!(1, result.node_response.len());
         assert_eq!("node-1", result.node_response[0].node_id);
+        assert_eq!(1790503964, result.output["start"]);
+    }
+
+    #[test]
+    fn rest_request_body_is_not_wrapped() {
+        let input = json!({
+            "mode": "immediate",
+            "timezone": "Europe/London"
+        });
+
+        assert_eq!(input, rest_request_body(input.clone()));
+        assert!(rest_request_body(input).get("data").is_none());
     }
 
     #[test]
