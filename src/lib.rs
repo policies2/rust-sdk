@@ -318,7 +318,12 @@ impl ExecutionClient {
             Transport::Rest { base_url, client } => {
                 let path = policy_path(&request.id, request.reference);
                 let mut response: PolicyExecutionResult = self
-                    .send_rest(client, base_url, &path, request.data)
+                    .send_rest(
+                        client,
+                        base_url,
+                        &path,
+                        rest_policy_request_body(request.data),
+                    )
                     .await?;
                 response.kind = "policy".to_string();
                 let _ = bugfixes::info!(
@@ -376,7 +381,12 @@ impl ExecutionClient {
             Transport::Rest { base_url, client } => {
                 let path = flow_path(&request.id, request.reference);
                 let mut response: FlowExecutionResult = self
-                    .send_rest(client, base_url, &path, request.data)
+                    .send_rest(
+                        client,
+                        base_url,
+                        &path,
+                        rest_flow_request_body(request.data),
+                    )
                     .await?;
                 response.kind = "flow".to_string();
                 let _ = bugfixes::info!(
@@ -430,7 +440,7 @@ impl ExecutionClient {
             .post(&url)
             .header("content-type", "application/json")
             .header("x-api-key", &self.api_key)
-            .json(&rest_request_body(data));
+            .json(&data);
 
         if let Some(user_agent) = &self.user_agent {
             builder = builder.header("user-agent", user_agent);
@@ -493,7 +503,11 @@ impl ExecutionClient {
     }
 }
 
-fn rest_request_body(data: Value) -> Value {
+fn rest_policy_request_body(data: Value) -> Value {
+    serde_json::json!({ "data": data })
+}
+
+fn rest_flow_request_body(data: Value) -> Value {
     data
 }
 
@@ -1052,14 +1066,27 @@ mod tests {
     }
 
     #[test]
-    fn rest_request_body_is_not_wrapped() {
+    fn rest_policy_request_body_wraps_input_data() {
         let input = json!({
-            "mode": "immediate",
-            "timezone": "Europe/London"
+            "Report": {
+                "severity": "error",
+                "ai_enabled": true
+            }
         });
 
-        assert_eq!(input, rest_request_body(input.clone()));
-        assert!(rest_request_body(input).get("data").is_none());
+        assert_eq!(input, rest_policy_request_body(input.clone())["data"]);
+    }
+
+    #[test]
+    fn flow_rest_request_body_stays_raw() {
+        let input = json!({
+            "Report": {
+                "severity": "error",
+                "ai_enabled": true
+            }
+        });
+
+        assert_eq!(input.clone(), rest_flow_request_body(input));
     }
 
     #[test]
