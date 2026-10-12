@@ -60,12 +60,24 @@ impl Default for TransportConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExecutionClientConfig {
     pub api_key: String,
     pub transport: TransportConfig,
     pub timeout: Option<Duration>,
     pub user_agent: Option<String>,
+}
+
+// Hand-written so `{:?}` of a config never prints the API key.
+impl std::fmt::Debug for ExecutionClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutionClientConfig")
+            .field("api_key", &"[redacted]")
+            .field("transport", &self.transport)
+            .field("timeout", &self.timeout)
+            .field("user_agent", &self.user_agent)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,9 +234,9 @@ pub fn init_bugfixes() -> Result<(), reqwest::Error> {
 }
 
 impl ExecutionClient {
+    /// Does not install the Bugfixes panic hook; call [`init_bugfixes`] at
+    /// startup if the application wants it.
     pub fn new(config: ExecutionClientConfig) -> Result<Self, Error> {
-        let _ = init_bugfixes();
-
         if config.api_key.trim().is_empty() {
             let _ = bugfixes::error!("execution client configuration rejected: missing api_key");
             return Err(Error::Configuration("api_key is required".into()));
@@ -619,7 +631,12 @@ fn map_http_error(status: StatusCode, body: String) -> Error {
         body
     };
 
-    let _ = bugfixes::error!("REST request returned status={} body={}", status, message);
+    // Length only: bodies can carry policy data and Bugfixes may ship logs off-box.
+    let _ = bugfixes::error!(
+        "REST request returned status={} body_bytes={}",
+        status,
+        message.len()
+    );
 
     match status {
         StatusCode::UNAUTHORIZED => Error::Authentication(message),
@@ -641,10 +658,10 @@ where
 
     serde_json::from_str::<T>(body).map_err(|err| {
         let _ = bugfixes::error!(
-            "failed to decode REST response status={} error={} body={}",
+            "failed to decode REST response status={} error={} body_bytes={}",
             status,
             err,
-            body
+            body.len()
         );
         Error::Decode(err.to_string())
     })
@@ -1000,6 +1017,19 @@ mod tests {
             let (_, tls) = rpc_uri(address, false).expect(address);
             assert!(!tls, "{address}");
         }
+    }
+
+    #[test]
+    fn config_debug_redacts_api_key() {
+        let config = ExecutionClientConfig {
+            api_key: "pk_live_secret_value".into(),
+            transport: TransportConfig::default(),
+            timeout: None,
+            user_agent: None,
+        };
+        let out = format!("{config:?} {config:#?}");
+        assert!(!out.contains("pk_live_secret_value"), "{out}");
+        assert!(out.contains("[redacted]"));
     }
 
     #[test]
