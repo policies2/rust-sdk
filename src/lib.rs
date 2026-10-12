@@ -249,6 +249,7 @@ impl ExecutionClient {
                     .as_deref()
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or(default_rest_base_url());
+                validate_base_url(base_url)?;
 
                 let client = HttpClient::builder()
                     .timeout(timeout)
@@ -521,6 +522,7 @@ fn rest_flow_request_body(data: Value) -> Value {
 }
 
 fn policy_path(id: &str, reference: Reference) -> String {
+    let id = encode_path_segment(id);
     match reference {
         Reference::Base => format!("/policy/{id}"),
         Reference::Version => format!("/policy_version/{id}"),
@@ -528,9 +530,41 @@ fn policy_path(id: &str, reference: Reference) -> String {
 }
 
 fn flow_path(id: &str, reference: Reference) -> String {
+    let id = encode_path_segment(id);
     match reference {
         Reference::Base => format!("/flow/{id}"),
         Reference::Version => format!("/flow_version/{id}"),
+    }
+}
+
+/// Percent-encodes everything but RFC 3986 unreserved characters, so an id
+/// like `../admin` or `x?y=1` can't change the request target.
+fn encode_path_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~' => out.push(byte as char),
+            // '.' is unreserved but "." / ".." are dot-segments, so encode it too.
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// The API key is sent on every request, so REST must use https unless the
+/// host is loopback (local development).
+fn validate_base_url(base_url: &str) -> Result<(), Error> {
+    let parsed = reqwest::Url::parse(base_url)
+        .map_err(|err| Error::Configuration(format!("invalid base_url: {err}")))?;
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if is_loopback_host(parsed.host_str().unwrap_or("")) => Ok(()),
+        "http" => Err(Error::Configuration(format!(
+            "refusing plaintext http to {base_url}: the api key would be sent unencrypted; use https (or a loopback address for local development)"
+        ))),
+        other => Err(Error::Configuration(format!(
+            "unsupported base_url scheme: {other}"
+        ))),
     }
 }
 
@@ -966,6 +1000,34 @@ mod tests {
             let (_, tls) = rpc_uri(address, false).expect(address);
             assert!(!tls, "{address}");
         }
+    }
+
+    #[test]
+    fn path_helpers_encode_ids() {
+        assert_eq!(
+            "/policy/%2E%2E%2Fadmin",
+            policy_path("../admin", Reference::Base)
+        );
+        assert_eq!("/flow/x%3Fy%3D1%23", flow_path("x?y=1#", Reference::Base));
+        assert_eq!("/policy/%2E%2E", policy_path("..", Reference::Base));
+        assert_eq!(
+            "/policy_version/3b7d4b2a-9aa0-4b6d-a1b4-9dcf11ce12ab",
+            policy_path("3b7d4b2a-9aa0-4b6d-a1b4-9dcf11ce12ab", Reference::Version)
+        );
+    }
+
+    #[test]
+    fn base_url_requires_https_unless_loopback() {
+        assert!(validate_base_url("https://api.policy2.net").is_ok());
+        assert!(validate_base_url("http://localhost:8080").is_ok());
+        assert!(validate_base_url("http://127.0.0.1:8080").is_ok());
+        assert!(validate_base_url("http://[::1]:8080").is_ok());
+        assert!(matches!(
+            validate_base_url("http://api.policy2.net"),
+            Err(Error::Configuration(_))
+        ));
+        assert!(validate_base_url("ftp://api.policy2.net").is_err());
+        assert!(validate_base_url("not a url").is_err());
     }
 
     #[test]
