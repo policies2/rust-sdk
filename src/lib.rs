@@ -16,17 +16,12 @@ use tonic::{Code, Request};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_REST_BASE_URL: &str = "https://api.policy2.net/run";
-const DEFAULT_RPC_ADDRESS: &str = "shuttle.proxy.rlwy.net:27179";
 const POLICY_RPC_PATH: &str = "/policy.v1.PolicyService/RunPolicy";
 const FLOW_RPC_PATH: &str = "/policy.v1.FlowService/RunFlow";
 static BUGFIXES_PANIC_HOOK: Once = Once::new();
 
 fn default_rest_base_url() -> &'static str {
     DEFAULT_REST_BASE_URL
-}
-
-fn default_rpc_address() -> &'static str {
-    DEFAULT_RPC_ADDRESS
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -50,6 +45,19 @@ pub struct TransportConfig {
     pub base_url: Option<String>,
     pub address: Option<String>,
     pub tls: bool,
+}
+
+/// REST over HTTPS to the hosted API. gRPC has no hosted default: it needs an
+/// explicit `address`, and plaintext is only allowed to loopback addresses.
+impl Default for TransportConfig {
+    fn default() -> Self {
+        Self {
+            kind: TransportKind::Rest,
+            base_url: None,
+            address: None,
+            tls: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -262,15 +270,16 @@ impl ExecutionClient {
                     .transport
                     .address
                     .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or(default_rpc_address());
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        Error::Configuration(
+                            "rpc transport requires an address; the hosted API is REST-only (TransportKind::Rest)".into(),
+                        )
+                    })?;
 
-                let uri = normalize_rpc_address(address, config.transport.tls);
-                let _ = bugfixes::info!(
-                    "configured RPC transport address={} tls={}",
-                    uri,
-                    config.transport.tls
-                );
+                let (uri, tls) = rpc_uri(address, config.transport.tls)?;
+                let _ = bugfixes::info!("configured RPC transport address={} tls={}", uri, tls);
                 let endpoint = Endpoint::from_shared(uri)
                     .map_err(|err| {
                         let _ = bugfixes::error!("invalid rpc address: {}", err);
@@ -279,7 +288,7 @@ impl ExecutionClient {
                     .connect_timeout(timeout)
                     .timeout(timeout);
 
-                let endpoint = if config.transport.tls {
+                let endpoint = if tls {
                     endpoint.tls_config(ClientTlsConfig::new()).map_err(|err| {
                         let _ = bugfixes::error!("failed to configure RPC tls transport: {}", err);
                         Error::RpcTransport(err)
@@ -525,16 +534,48 @@ fn flow_path(id: &str, reference: Reference) -> String {
     }
 }
 
-fn normalize_rpc_address(address: &str, tls: bool) -> String {
-    if address.contains("://") {
-        let _ = bugfixes::log!("using explicit RPC address {}", address);
-        return address.to_string();
-    }
-    if tls {
+/// Builds the RPC URI and whether it uses TLS. An explicit scheme wins over the
+/// `tls` flag. Plaintext is refused unless the host is loopback, because the API
+/// key travels in request metadata.
+fn rpc_uri(address: &str, tls: bool) -> Result<(String, bool), Error> {
+    let uri = if address.contains("://") {
+        address.to_string()
+    } else if tls {
         format!("https://{address}")
     } else {
         format!("http://{address}")
+    };
+
+    let parsed: http::Uri = uri
+        .parse()
+        .map_err(|err| Error::Configuration(format!("invalid rpc address: {err}")))?;
+    let tls = match parsed.scheme_str() {
+        Some("https") => true,
+        Some("http") => false,
+        other => {
+            return Err(Error::Configuration(format!(
+                "unsupported rpc address scheme: {}",
+                other.unwrap_or("")
+            )))
+        }
+    };
+
+    if !tls && !is_loopback_host(parsed.host().unwrap_or("")) {
+        return Err(Error::Configuration(format!(
+            "refusing plaintext rpc to {address}: the api key would be sent unencrypted; use tls: true (or a loopback address for local development)"
+        )));
     }
+
+    Ok((uri, tls))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 fn map_http_error(status: StatusCode, body: String) -> Error {
@@ -883,12 +924,48 @@ mod tests {
     }
 
     #[test]
-    fn defaults_rpc_address() {
-        assert_eq!(default_rpc_address(), "shuttle.proxy.rlwy.net:27179");
-        assert_eq!(
-            normalize_rpc_address(default_rpc_address(), false),
-            "http://shuttle.proxy.rlwy.net:27179"
-        );
+    fn default_transport_is_rest_over_tls() {
+        let transport = TransportConfig::default();
+        assert_eq!(TransportKind::Rest, transport.kind);
+        assert!(transport.tls);
+    }
+
+    #[tokio::test]
+    async fn rpc_without_address_is_rejected() {
+        let result = ExecutionClient::new(ExecutionClientConfig {
+            api_key: "pk_test".into(),
+            transport: TransportConfig {
+                kind: TransportKind::Rpc,
+                ..TransportConfig::default()
+            },
+            timeout: None,
+            user_agent: None,
+        });
+        assert!(matches!(result, Err(Error::Configuration(_))));
+    }
+
+    #[test]
+    fn rpc_refuses_plaintext_to_remote_hosts() {
+        for address in [
+            "shuttle.proxy.rlwy.net:27179",
+            "http://rpc.policy2.net:443",
+            "10.0.0.5:8082",
+        ] {
+            assert!(
+                matches!(rpc_uri(address, false), Err(Error::Configuration(_))),
+                "{address} should be refused"
+            );
+        }
+        // An explicit http:// scheme can't bypass the check via tls: true.
+        assert!(rpc_uri("http://rpc.policy2.net", true).is_err());
+    }
+
+    #[test]
+    fn rpc_allows_plaintext_to_loopback() {
+        for address in ["localhost:8082", "127.0.0.1:8082", "http://[::1]:8082"] {
+            let (_, tls) = rpc_uri(address, false).expect(address);
+            assert!(!tls, "{address}");
+        }
     }
 
     #[test]
@@ -906,18 +983,18 @@ mod tests {
     }
 
     #[test]
-    fn normalize_rpc_address_adds_scheme() {
+    fn rpc_uri_adds_scheme() {
         assert_eq!(
-            "http://127.0.0.1:8081",
-            normalize_rpc_address("127.0.0.1:8081", false)
+            ("http://127.0.0.1:8081".to_string(), false),
+            rpc_uri("127.0.0.1:8081", false).unwrap()
         );
         assert_eq!(
-            "https://127.0.0.1:8081",
-            normalize_rpc_address("127.0.0.1:8081", true)
+            ("https://127.0.0.1:8081".to_string(), true),
+            rpc_uri("127.0.0.1:8081", true).unwrap()
         );
         assert_eq!(
-            "https://example.com",
-            normalize_rpc_address("https://example.com", false)
+            ("https://example.com".to_string(), true),
+            rpc_uri("https://example.com", false).unwrap()
         );
     }
 

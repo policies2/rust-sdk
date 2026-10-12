@@ -1,6 +1,6 @@
 use policies::{
     init_bugfixes, ExecuteFlowRequest, ExecutionClient, ExecutionClientConfig, Reference,
-    TransportConfig, TransportKind,
+    TransportConfig,
 };
 use serde_json::json;
 
@@ -11,10 +11,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = ExecutionClient::new(ExecutionClientConfig {
         api_key: std::env::var("POLICY_API_KEY").unwrap_or_else(|_| "pk_live_example".into()),
         transport: TransportConfig {
-            kind: TransportKind::Rest,
             base_url: std::env::var("POLICY_API_URL").ok(),
-            address: None,
-            tls: false,
+            ..TransportConfig::default()
         },
         timeout: None,
         user_agent: None,

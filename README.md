@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```rust
 use policies::{
     init_bugfixes, ExecutePolicyRequest, ExecutionClient, ExecutionClientConfig, Reference,
-    TransportConfig, TransportKind,
+    TransportConfig,
 };
 use serde_json::json;
 
@@ -37,12 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = ExecutionClient::new(ExecutionClientConfig {
         api_key: std::env::var("POLICY_API_KEY")?,
-        transport: TransportConfig {
-            kind: TransportKind::Rest,
-            base_url: None,
-            address: None,
-            tls: false,
-        },
+        transport: TransportConfig::default(), // REST over HTTPS to api.policy2.net
         timeout: None,
         user_agent: None,
     })?;
@@ -66,7 +61,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Call `init_bugfixes()?` during startup to enable Bugfixes logging and the panic hook for the process.
 
-If unset, the SDK defaults REST execution to `https://api.policy2.net/run` and gRPC execution to `shuttle.proxy.rlwy.net:27179`. REST requests append `/policy...` or `/flow...` automatically based on the operation. Set `transport.base_url` or `transport.address` to override them.
+`TransportConfig::default()` uses REST over HTTPS to `https://api.policy2.net/run`. REST requests append `/policy...` or `/flow...` automatically based on the operation. Set `transport.base_url` to override it.
+
+gRPC (`TransportKind::Rpc`) has no hosted endpoint yet, so `transport.address` is required. The SDK refuses plaintext gRPC to anything but a loopback address (`localhost`, `127.0.0.1`, `::1`), because the API key travels in request metadata: set `tls: true` for any remote server.
 
 Execution reference rules:
 

@@ -13,7 +13,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         transport: TransportConfig {
             kind: TransportKind::Rpc,
             base_url: None,
-            address: std::env::var("POLICY_RPC_ADDRESS").ok(),
+            // gRPC has no hosted endpoint yet; this targets a locally running API.
+            // Plaintext is only allowed to loopback addresses; use tls: true otherwise.
+            address: Some(
+                std::env::var("POLICY_RPC_ADDRESS").unwrap_or_else(|_| "localhost:8082".into()),
+            ),
             tls: false,
         },
         timeout: None,
