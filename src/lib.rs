@@ -1,3 +1,12 @@
+//! Client for running stored policies and flows on policy2.
+//!
+//! Build an [`ExecutionClient`] from an [`ExecutionClientConfig`], then call
+//! [`ExecutionClient::execute_policy`] or [`ExecutionClient::execute_flow`].
+//! REST over HTTPS to the hosted API is the default transport; gRPC needs an
+//! explicit address.
+
+#![warn(missing_docs)]
+
 use http::uri::PathAndQuery;
 use prost::Message;
 use prost_types::{value::Kind as ProstKind, ListValue, Struct, Value as ProstValue};
@@ -24,26 +33,40 @@ fn default_rest_base_url() -> &'static str {
     DEFAULT_REST_BASE_URL
 }
 
+/// How the client talks to the API.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum TransportKind {
+    /// JSON over HTTPS. Works with the hosted API.
     Rest,
+    /// gRPC. Needs [`TransportConfig::address`].
     Rpc,
 }
 
+/// What the `id` in a request refers to.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Reference {
+    /// The policy or flow ID; runs its current version.
     #[default]
     Base,
+    /// A specific version ID.
     Version,
 }
 
+/// Transport settings for an [`ExecutionClient`].
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
+    /// Which transport to use.
     pub kind: TransportKind,
+    /// REST base URL. Defaults to the hosted API; must be `https` unless the
+    /// host is loopback.
     pub base_url: Option<String>,
+    /// gRPC address (`host:port` or a URL). Required for [`TransportKind::Rpc`].
     pub address: Option<String>,
+    /// Use TLS for gRPC. Plaintext is only allowed to loopback addresses.
     pub tls: bool,
 }
 
@@ -60,11 +83,16 @@ impl Default for TransportConfig {
     }
 }
 
+/// Settings for [`ExecutionClient::new`].
 #[derive(Clone)]
 pub struct ExecutionClientConfig {
+    /// API key sent with every request. Required.
     pub api_key: String,
+    /// Transport settings.
     pub transport: TransportConfig,
+    /// Request timeout. Defaults to 30 seconds.
     pub timeout: Option<Duration>,
+    /// Optional `User-Agent` header.
     pub user_agent: Option<String>,
 }
 
@@ -80,116 +108,190 @@ impl std::fmt::Debug for ExecutionClientConfig {
     }
 }
 
+/// A request to run a stored policy.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecutePolicyRequest {
+    /// Policy ID, or version ID when `reference` is [`Reference::Version`].
     #[serde(skip)]
     pub id: String,
+    /// What `id` refers to.
     #[serde(skip)]
     pub reference: Reference,
+    /// Input data the policy is evaluated against.
     pub data: Value,
 }
 
+/// A request to run a stored flow.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecuteFlowRequest {
+    /// Flow ID, or version ID when `reference` is [`Reference::Version`].
     #[serde(skip)]
     pub id: String,
+    /// What `id` refers to.
     #[serde(skip)]
     pub reference: Reference,
+    /// Input data the flow starts with.
     pub data: Value,
 }
 
+/// Time spent in the API service, as duration strings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrchestratorTiming {
+    /// Time in the API's own code.
     pub go: String,
+    /// Time loading the policy from the database.
     pub database: String,
+    /// Total API time.
     pub total: String,
 }
 
+/// Timing breakdown for a policy run, as duration strings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExecutionTiming {
+    /// API service timings, when reported.
     pub orchestrator: Option<OrchestratorTiming>,
+    /// Time in the rules engine.
     pub engine: String,
+    /// Total time.
     pub total: String,
 }
 
+/// The outcome of running a policy.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyExecutionResult {
+    /// Always `"policy"`.
     #[serde(default)]
     pub kind: String,
+    /// Whether the policy passed.
     pub result: bool,
+    /// Evaluation trace showing how each rule was decided.
     pub trace: Value,
+    /// The policy's rule text, one entry per line.
     pub rule: Vec<String>,
+    /// The input data, as evaluated.
     pub data: Value,
+    /// Evaluation error, or `null`.
     #[serde(default)]
     pub error: Value,
+    /// Additional error details, or `null`.
     #[serde(default)]
     pub errors: Value,
+    /// Result of each labelled rule.
     pub labels: Value,
+    /// Timing breakdown, when reported.
     pub execution: Option<ExecutionTiming>,
+    /// Timing breakdown when the server reports it as `timings`.
     pub timings: Option<ExecutionTiming>,
 }
 
+/// Timing for one flow node, as duration strings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlowNodeExecution {
+    /// Time loading the node's policy.
     pub database: String,
+    /// Time in the rules engine.
     pub engine: String,
+    /// Total node time.
     pub total: String,
 }
 
+/// The outcome of one node in a flow run.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlowNodeResponse {
+    /// Node ID within the flow.
     #[serde(rename = "nodeId")]
     pub node_id: String,
+    /// Node type, for example `"policy"`.
     #[serde(rename = "nodeType")]
     pub node_type: String,
+    /// The node's policy result.
     pub response: PolicyExecutionData,
+    /// Node timing, when reported.
     pub execution: Option<FlowNodeExecution>,
 }
 
+/// A policy result inside a flow node.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyExecutionData {
+    /// Whether the policy passed.
     pub result: bool,
+    /// Evaluation trace showing how each rule was decided.
     pub trace: Value,
+    /// The policy's rule text, one entry per line.
     pub rule: Vec<String>,
+    /// The input data, as evaluated.
     pub data: Value,
+    /// Evaluation error, or `null`.
     #[serde(default)]
     pub error: Value,
+    /// Additional error details, or `null`.
     #[serde(default)]
     pub errors: Value,
+    /// Result of each labelled rule.
     pub labels: Value,
 }
 
+/// Timing breakdown for a flow run, as duration strings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlowExecutionTiming {
+    /// Time in the API service.
     pub orchestrator: String,
+    /// Time loading from the database.
     pub database: String,
+    /// Time in the rules engine.
     pub engine: String,
+    /// Total time.
     pub total: String,
 }
 
+/// The outcome of running a flow.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlowExecutionResult {
+    /// Always `"flow"`.
     #[serde(default)]
     pub kind: String,
+    /// The flow's final result.
     pub result: Value,
+    /// Flow output, or `null`.
     #[serde(default)]
     pub output: Value,
+    /// Result of each node that ran, in order.
     #[serde(rename = "nodeResponse")]
     pub node_response: Vec<FlowNodeResponse>,
+    /// Timing breakdown, when reported.
     pub execution: Option<FlowExecutionTiming>,
+    /// Timing breakdown when the server reports it as `timings`.
     pub timings: Option<FlowExecutionTiming>,
 }
 
+/// Errors returned by [`ExecutionClient`].
+///
+/// New variants may be added in minor releases, so matches need a `_` arm.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
+    /// Invalid client configuration, such as a missing API key or bad URL.
     Configuration(String),
+    /// The API key was rejected (HTTP 401 / gRPC `Unauthenticated`).
     Authentication(String),
+    /// The API key lacks access (HTTP 403 / gRPC `PermissionDenied`).
     Authorization(String),
-    Server { message: String, status: u16 },
+    /// Any other non-success HTTP response.
+    Server {
+        /// Error message from the server.
+        message: String,
+        /// HTTP status code.
+        status: u16,
+    },
+    /// The REST request failed to send or complete.
     Transport(reqwest::Error),
+    /// The response body couldn't be decoded.
     Decode(String),
+    /// The gRPC connection couldn't be set up.
     RpcTransport(tonic::transport::Error),
+    /// Any other non-success gRPC status.
     RpcStatus(Box<tonic::Status>),
+    /// A value couldn't be sent as gRPC metadata (for example the API key).
     Metadata(String),
 }
 
@@ -221,12 +323,16 @@ enum Transport {
     },
 }
 
+/// Runs stored policies and flows. Build once and reuse it; it holds the
+/// connection pool.
 pub struct ExecutionClient {
     transport: Transport,
     api_key: String,
     user_agent: Option<String>,
 }
 
+/// Opt-in: sets up Bugfixes error reporting from `BUGFIXES_*` env vars and
+/// installs its global panic hook (once per process).
 pub fn init_bugfixes() -> Result<(), reqwest::Error> {
     bugfixes::init_global_from_env()?;
     BUGFIXES_PANIC_HOOK.call_once(bugfixes::install_global_panic_hook);
@@ -234,6 +340,10 @@ pub fn init_bugfixes() -> Result<(), reqwest::Error> {
 }
 
 impl ExecutionClient {
+    /// Builds a client. Fails with [`Error::Configuration`] if the API key is
+    /// empty, the REST URL isn't `https` (outside loopback), or gRPC has no
+    /// address.
+    ///
     /// Does not install the Bugfixes panic hook; call [`init_bugfixes`] at
     /// startup if the application wants it.
     pub fn new(config: ExecutionClientConfig) -> Result<Self, Error> {
@@ -323,6 +433,7 @@ impl ExecutionClient {
         })
     }
 
+    /// Runs a stored policy against `request.data`.
     pub async fn execute_policy(
         &self,
         request: ExecutePolicyRequest,
@@ -386,6 +497,7 @@ impl ExecutionClient {
         }
     }
 
+    /// Runs a stored flow against `request.data`.
     pub async fn execute_flow(
         &self,
         request: ExecuteFlowRequest,
