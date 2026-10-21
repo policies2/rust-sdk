@@ -15,7 +15,7 @@ It does not support creating, updating, publishing, or administering resources.
 
 ```toml
 [dependencies]
-policies = "0.1"
+policies = "0.2"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
