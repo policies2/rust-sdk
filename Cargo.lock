@@ -114,9 +114,9 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "bugfixes"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e3f0c56aa581fd231ba13d0d7d1ea38edf1374044624b683fc26c892c6c63bb"
+checksum = "9ec04ea4395ef393d12746b8c352655a8d428c02e240597664b04a41873bfee7"
 dependencies = [
  "reqwest",
  "serde",
